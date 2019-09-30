@@ -19,7 +19,7 @@ spec:
       - env:
         - name: NZBGET_ADDRESS
           value: http://nzb:6789
-        image: docker.io/justinbarrick/nzb-exporter-7570a77b873e29eec901a9c427c8b5c0@sha256:8dc7f58bbe7371f3337dff6dfd913a08009540678f722df1f3aff7ec1127588b
+        image: docker.io/justinbarrick/nzb-exporter-7570a77b873e29eec901a9c427c8b5c0@sha256:28fe9af17765bb1fca2d8e5b1259a4688490be44573407f5fc417151c1c70fcf
         name: nzb-exporter
         ports:
         - containerPort: 2112

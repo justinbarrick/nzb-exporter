@@ -66,6 +66,88 @@ type NzbgetStatusResult struct {
 	URLCount            int64                `json:"UrlCount"`
 }
 
+type NzbgetQueue struct {
+	Result  []NzbgetQueueResult `json:"result"`
+	Version string                   `json:"version"`
+}
+
+type NzbgetQueueResult struct {
+	ActiveDownloads    int64                    `json:"ActiveDownloads"`
+	Category           string                   `json:"Category"`
+	CriticalHealth     int64                    `json:"CriticalHealth"`
+	DeleteStatus       string                   `json:"DeleteStatus"`
+	Deleted            bool                     `json:"Deleted"`
+	DestDir            string                   `json:"DestDir"`
+	DownloadTimeSec    int64                    `json:"DownloadTimeSec"`
+	DownloadedSizeHi   int64                    `json:"DownloadedSizeHi"`
+	DownloadedSizeLo   int64                    `json:"DownloadedSizeLo"`
+	DownloadedSizeMB   int64                    `json:"DownloadedSizeMB"`
+	DupeKey            string                   `json:"DupeKey"`
+	DupeMode           string                   `json:"DupeMode"`
+	DupeScore          int64                    `json:"DupeScore"`
+	ExParStatus        string                   `json:"ExParStatus"`
+	ExtraParBlocks     int64                    `json:"ExtraParBlocks"`
+	FailedArticles     int64                    `json:"FailedArticles"`
+	FileCount          int64                    `json:"FileCount"`
+	FileSizeHi         int64                    `json:"FileSizeHi"`
+	FileSizeLo         int64                    `json:"FileSizeLo"`
+	FileSizeMB         int64                    `json:"FileSizeMB"`
+	FinalDir           string                   `json:"FinalDir"`
+	FirstID            int64                    `json:"FirstID"`
+	Health             int64                    `json:"Health"`
+	Kind               string                   `json:"Kind"`
+	LastID             int64                    `json:"LastID"`
+	Log                []interface{}            `json:"Log"`
+	MarkStatus         string                   `json:"MarkStatus"`
+	MaxPostTime        int64                    `json:"MaxPostTime"`
+	MaxPriority        int64                    `json:"MaxPriority"`
+	MessageCount       int64                    `json:"MessageCount"`
+	MinPostTime        int64                    `json:"MinPostTime"`
+	MinPriority        int64                    `json:"MinPriority"`
+	MoveStatus         string                   `json:"MoveStatus"`
+	NZBFilename        string                   `json:"NZBFilename"`
+	Nzbid              int64                    `json:"NZBID"`
+	NZBName            string                   `json:"NZBName"`
+	NZBNicename        string                   `json:"NZBNicename"`
+	ParStatus          string                   `json:"ParStatus"`
+	ParTimeSec         int64                    `json:"ParTimeSec"`
+	Parameters         []NzbgetParameters `json:"Parameters"`
+	PausedSizeHi       int64                    `json:"PausedSizeHi"`
+	PausedSizeLo       int64                    `json:"PausedSizeLo"`
+	PausedSizeMB       int64                    `json:"PausedSizeMB"`
+	PostInfoText       string                   `json:"PostInfoText"`
+	PostStageProgress  int64                    `json:"PostStageProgress"`
+	PostStageTimeSec   int64                    `json:"PostStageTimeSec"`
+	PostTotalTimeSec   int64                    `json:"PostTotalTimeSec"`
+	RemainingFileCount int64                    `json:"RemainingFileCount"`
+	RemainingParCount  int64                    `json:"RemainingParCount"`
+	RemainingSizeHi    int64                    `json:"RemainingSizeHi"`
+	RemainingSizeLo    int64                    `json:"RemainingSizeLo"`
+	RemainingSizeMB    int64                    `json:"RemainingSizeMB"`
+	RepairTimeSec      int64                    `json:"RepairTimeSec"`
+	ScriptStatus       string                   `json:"ScriptStatus"`
+	ScriptStatuses     []interface{}            `json:"ScriptStatuses"`
+	ServerStats        []NzbgetServerStats `json:"ServerStats"`
+	Status             string                   `json:"Status"`
+	SuccessArticles    int64                    `json:"SuccessArticles"`
+	TotalArticles      int64                    `json:"TotalArticles"`
+	URL                string                   `json:"URL"`
+	UnpackStatus       string                   `json:"UnpackStatus"`
+	UnpackTimeSec      int64                    `json:"UnpackTimeSec"`
+	URLStatus          string                   `json:"UrlStatus"`
+}
+
+type NzbgetServerStats struct {
+	FailedArticles  int64 `json:"FailedArticles"`
+	ServerID        int64 `json:"ServerID"`
+	SuccessArticles int64 `json:"SuccessArticles"`
+}
+
+type NzbgetParameters struct {
+	Name  string `json:"Name"`
+	Value string `json:"Value"`
+}
+
 var (
 	articleCacheHi = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "nzb_article_cache_hi",
@@ -230,6 +312,10 @@ var (
 	urlCount = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "nzb_url_count",
 	})
+
+	downloadStatuses = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nzb_download_statuses",
+	}, []string{"status"})
 )
 
 func boolToFloat(b bool) float64 {
@@ -239,7 +325,36 @@ func boolToFloat(b bool) float64 {
 	return float64(0)
 }
 
-func collect() {
+func collectQueue() {
+	resp, err := http.Get(fmt.Sprintf("%s/jsonrpc/listgroups", os.Getenv("NZBGET_ADDRESS")))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	queue := &NzbgetQueue{}
+
+	if err := json.NewDecoder(resp.Body).Decode(queue); err != nil {
+		log.Fatal(err)
+	}
+
+	statuses := map[string]float64{}
+
+	for _, queued := range queue.Result {
+		statuses[queued.Status] += 1
+		if queued.CriticalHealth != 1000 {
+			statuses["UNHEALTHY"] += 1
+		}
+	}
+
+	for status, count := range statuses {
+		downloadStatuses.With(prometheus.Labels{
+			"status": status,
+		}).Set(count)
+	}
+}
+
+func collectStatus() {
 	resp, err := http.Get(fmt.Sprintf("%s/jsonrpc/status", os.Getenv("NZBGET_ADDRESS")))
 	if err != nil {
 		log.Fatal(err)
@@ -305,7 +420,8 @@ func main() {
 	promHandler := promhttp.Handler()
 
 	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		collect()
+		collectStatus()
+		collectQueue()
 		promHandler.ServeHTTP(w, r)
 	})
 
