@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nzb-exporter
+  namespace: media
+  labels:
+    app: nzb-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nzb-exporter
+  template:
+    metadata:
+      labels:
+        app: nzb-exporter
+    spec:
+      containers:
+      - name: nzb-exporter
+        image: github.com/justinbarrick/nzb-exporter
+        ports:
+        - containerPort: 2112
+        env:
+        - name: NZBGET_ADDRESS
+          value: http://nzb:6789
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nzb-exporter
+  namespace: media
+  labels:
+    app: nzb-exporter
+spec:
+  selector:
+    app: nzb-exporter
+  ports:
+    - protocol: TCP
+      name: nzb
+      port: 80
+      targetPort: 2112
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nzb-metrics
+  namespace: monitoring
+  labels:
+    k8s-app: nzb-metrics
+spec:
+  jobLabel: nzb
+  selector:
+    matchLabels:
+      app: nzb-exporter
+  namespaceSelector:
+    matchNames:
+    - media
+  endpoints:
+  - port: nzb
+    scheme: HTTP
+    path: /metrics
